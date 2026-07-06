@@ -84,10 +84,10 @@ rather than just asserting the fix was correct.
     `rate_song` and `add_to_playlist`, since both of those actions can trigger a
     notification.
 - **`seed_data.py`** — Populates the DB with 5 users, 13 songs, 3 playlists, 10 tags,
-  friendships, and both recent and stale `ListeningEvent`s (used to test the 24-hour
-  "listening now" window).
-- **`tests/`** — `test_playlists.py`, `test_search.py`, `test_streaks.py`, each testing
-  the matching service module.
+  friendships, and `ListeningEvent`s at a range of specific ages (minutes to days
+  old), which is useful for testing anything that filters activity by recency.
+- **`tests/`** — `test_playlists.py`, `test_search.py`, `test_streaks.py`,
+  `test_feed.py`, each testing the matching service module.
 
 ### Pattern noticed
 
@@ -123,11 +123,13 @@ sharer, call `create_notification(user_id=song.shared_by, notification_type=...,
 body=...)`.
 
 `rate_song` follows the same validation pattern (look up song, look up rater,
-check/create the `Rating` row) but **stops after `db.session.commit()`** — it never
-calls `create_notification`. This asymmetry is Issue #4: rating a friend's song
-never notifies them, even though adding their song to a playlist does.
+check/create the `Rating` row), ending at `db.session.commit()`.
 
-### Five open issues (from README, to plan against)
+---
+
+## Issue Tracker & Initial Plan
+
+Five open issues, per the README, each mapped to one service file:
 
 | # | Title | Service |
 |---|-------|---------|
@@ -137,9 +139,8 @@ never notifies them, even though adding their song to a playlist does.
 | 4 | No notification when a friend rates my song | `notification_service.py` |
 | 5 | Last song in a playlist never shows up | `playlist_service.py` |
 
-Rough plan: fixing all 5. #1 and #5 already traced (see RCA entries below once
-written); #4's root cause is already identified above from reading the code —
-missing `create_notification` call in `rate_song`. #2 and #3 still need investigation.
+Plan going in: attempt all 5 (stretch goal) rather than stopping at the 3 required.
+All 5 ended up fixed — see the Root Cause Analysis entries below for each.
 
 ---
 

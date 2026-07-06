@@ -193,6 +193,13 @@ correctly excluded. Also confirmed `get_activity_feed()` — which intentionally
 ignores `RECENT_THRESHOLD` and just returns the most recent N events regardless of
 age — was untouched, since it doesn't reference the constant.
 
+**Regression test:** Added `tests/test_feed.py`, covering events at 10/20 minutes
+ago (should show) and 2 hours/40 minutes ago (should not show). Verified this test
+file actually catches the original bug: temporarily reverted `RECENT_THRESHOLD` back
+to `timedelta(hours=24)` and reran the suite — the 2-hour and 40-minute tests failed
+exactly as expected (`assert [...] == []` with the stale event still present), while
+the 10/20-minute tests still passed. Restored the fix afterward; all 4 pass again.
+
 ---
 
 ### Issue #3 — The same song keeps showing up twice in search

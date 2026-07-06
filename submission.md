@@ -2,8 +2,58 @@
 
 ## AI Usage
 
-_(To be filled in during Milestone 4, once all bugs are fixed — will describe specific
-prompts used to navigate the codebase and verify root causes.)_
+I used Claude throughout this project as a pair-programming partner, mostly in a
+question-and-answer format: I'd read a file and describe what I thought it did, and
+it would confirm, correct, or point me at the specific line I'd missed, rather than
+just telling me the answer outright.
+
+**Codebase orientation.** During Milestone 1, I read `playlist_service.py` and
+`notification_service.py` myself and described each function out loud; Claude
+checked my summaries against the actual code. This caught two real gaps in my
+understanding: I initially thought `get_playlist_songs()`'s ordering came from
+insertion order, and it pointed me specifically at the `.order_by(asc(playlist_entries.c.position))`
+line and the `position` column on the `playlist_entries` association table. I also
+initially summarized `rate_song()` as "rejecting a second rating," and it corrected
+me by pointing at the exact line (`existing.score = score`) showing it actually
+overwrites the old rating.
+
+**Finding Issue #4 during orientation, not during dedicated debugging.** While
+comparing `add_to_playlist()` and `rate_song()` function-by-function (not looking
+for bugs yet, just building a mental model), Claude asked whether `rate_song()`
+ever calls `create_notification()` the way `add_to_playlist()` does. I said yes
+from memory without rereading the function — Claude checked again and pointed out
+it doesn't, which is what led to identifying Issue #4 before I'd even opened the
+issue tracker.
+
+**Where AI got it wrong and I had to verify.** For Issue #3 (search duplicates),
+Claude's first read of `search_songs()` concluded that joining `Song` to
+`song_tags` would cause songs with multiple tags to appear multiple times in
+results, and told me to just remove the join. That reasoning sounded right and I
+agreed. But when it actually ran the existing test suite against the *original,
+unmodified* code before making the change, `test_search_no_duplicates_multi_tag_song`
+— the test written specifically to catch this — passed. That contradiction forced a
+second, deeper investigation: dumping the raw compiled SQL to prove the join really
+does produce 3 rows for a 3-tag song at the database level, while separately
+confirming that SQLAlchemy's `Query.all()` was automatically de-duplicating the
+ORM objects before they reached `search_songs()`'s return value — which is why the
+"obvious" bug wasn't actually observable in this environment. The eventual fix
+(remove the join) ended up being the same code change, but the *reasoning*
+changed completely, and the RCA entry documents both the wrong first theory and
+the verification that corrected it. This is the clearest example from this project
+of why "reproduce before fixing" matters even when a diagnosis sounds obviously
+correct.
+
+**Where I had to redirect a wrong assumption before it wasted time.** For Issue #2
+(feed), before checking anything empirically, Claude first suspected the bug was a
+timezone-naive-vs-aware datetime comparison issue (SQLite stripping tzinfo on
+storage). It actually tested that theory directly against an in-memory database and
+disproved it (filtering behaved correctly either way), then found the real cause by
+reading `seed_data.py`'s own comments, which explicitly state which listening
+events should and shouldn't appear as "listening now." I was initially skeptical
+when it proposed changing `RECENT_THRESHOLD` from 24 hours to 30 minutes and said
+so — asking it to justify the change more concretely before I'd agree — which is
+what led to it walking through the exact seed data line numbers and time deltas
+rather than just asserting the fix was correct.
 
 ---
 

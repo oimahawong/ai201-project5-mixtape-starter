@@ -249,3 +249,44 @@ join and assuming it would cause visible duplicates, without first checking whet
 it actually did. It was the *reproduction* step — reading the actual behavior
 rather than reasoning about what "should" happen — that caught the error and led
 to the real (more nuanced) explanation above.
+
+---
+
+### Issue #4 — I got notified when a friend added my song to a playlist but not when they rated it
+
+**How you reproduced it:** Opened `flask shell` and called `get_notifications(sharer_id)`
+before and after calling `rate_song(rater_id, song_id, score)` for a song shared by
+someone other than the rater. Notification count was identical before and after
+(`1, 1`) — rating a friend's song produced zero new notifications for its sharer.
+
+**How you found the root cause:** Read every function in `notification_service.py`
+top to bottom during initial codebase orientation (before opening the bug tracker),
+specifically comparing `add_to_playlist()` against `rate_song()` since both are
+supposed to notify a song's original sharer about an action a friend took. Both
+functions have the same shape up through validating IDs and committing the primary
+change (adding to the playlist / saving the rating). `add_to_playlist()` then has
+one more step: `if song.shared_by != added_by_user_id: create_notification(...)`.
+`rate_song()` has no equivalent step at all — it commits and returns immediately.
+The moment of confidence was structural, not a single suspicious line: it's not
+that `rate_song()` has a wrong condition, it's that it's missing an entire step
+`add_to_playlist()` has.
+
+**The root cause:** `rate_song()` never calls `create_notification()`. This isn't a
+typo or off-by-one — the notification step simply was never built for this code
+path, even though the pattern for "notify the sharer when a friend interacts with
+their song" already existed and was working correctly for the playlist-add case.
+Two functions in the same file implement the same conceptual feature
+inconsistently: one calls the shared notification helper, the other doesn't.
+
+**Your fix and side-effect check:** Added the same pattern used in
+`add_to_playlist()` to the end of `rate_song()`, right before `return rating`:
+skip notifying if the rater is the song's own sharer (`user_id != song.shared_by`),
+otherwise call `create_notification()` with a `"song_rated"` type and a body
+message built from `rater.username`, `song.title`, and `score` — all variables
+already in scope in the function. Verified two cases directly: rating a friend's
+song now produces exactly one new notification (`before: 1, after: 2`), and rating
+your *own* song still produces none (`self-rate before: 2, after: 2`), matching
+`add_to_playlist()`'s existing self-action exemption. Also confirmed updating an
+*existing* rating (the `if existing: existing.score = score` branch) still runs
+through the same new notification step without needing separate handling, since
+the notification call sits after both branches of that if/else.

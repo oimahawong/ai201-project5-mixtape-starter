@@ -192,3 +192,60 @@ and every event 2 hours or older (including a friend's *only* listening event) i
 correctly excluded. Also confirmed `get_activity_feed()` — which intentionally
 ignores `RECENT_THRESHOLD` and just returns the most recent N events regardless of
 age — was untouched, since it doesn't reference the constant.
+
+---
+
+### Issue #3 — The same song keeps showing up twice in search
+
+**How you reproduced it:** This one didn't reproduce the way I expected, and that's
+worth documenting honestly. `search_songs()` joins `Song` to the `song_tags`
+association table, so my first hypothesis was that a song with multiple tags would
+come back multiple times (once per tag row). I ran the existing test suite against
+the *original, unmodified* code first — including `test_search_no_duplicates_multi_tag_song`,
+which is written specifically to catch this — and it passed. I then manually
+searched for every single letter a–z against the full seeded dataset (13 songs,
+several with 3+ tags) using the unmodified function, and through the real
+`/songs/search` HTTP endpoint via Flask's test client. Zero duplicates appeared in
+any of it.
+
+**How you found the root cause:** Since the "obvious" symptom wasn't observable, I
+dumped the raw compiled SQL for the query (`str(query.statement)`) and executed it
+directly against the database, bypassing the ORM's result-loading step. That raw
+SQL execution returned **3 rows** for a song with 3 tags — proof that the join
+really does fan out at the database level, exactly as the join structure would
+suggest. But `search_songs()` itself, using `db.session.query(Song)...all()`,
+returned only 1. The gap between those two results was the moment it clicked: the
+duplication is real at the SQL layer, but something in between was silently
+absorbing it.
+
+**The root cause:** `search_songs()` performs `db.session.query(Song).outerjoin(song_tags, ...)`
+but the `.filter()` only ever checks `Song.title`/`Song.artist` — nothing about the
+join is used for filtering. The join's only effect is to multiply the raw SQL
+result by however many tags a song has. In most SQLAlchemy usage this would produce
+visible duplicate objects, but SQLAlchemy's legacy `Query.all()` API automatically
+de-duplicates full-entity results by primary key (a documented difference from the
+newer `session.execute(select(...))` style, which requires an explicit `.unique()`
+call to get the same behavior). That's why the installed SQLAlchemy version (2.0.51,
+same as what's pinned in this project's `.venv`) masks the bug: the duplication
+happens, then gets quietly collapsed before `search_songs()` returns. The join was
+still a real defect — dead weight relying on an implicit ORM behavior it never
+asked for, rather than a query written to only do what it needs.
+
+**Your fix and side-effect check:** Removed the `.outerjoin(song_tags, ...)` call
+entirely (and the now-unused `Tag`/`song_tags` imports), since the query never
+needed it — `Song.to_dict()` already fetches tags independently through the
+`Song.tags` relationship. Confirmed tags are still present and correct in search
+results (e.g. searching "Crown" still returns `['rap', 'hip-hop', 'boom bap']` for
+"Crown Heights Anthem"). Re-ran the full existing test suite (13/13 pass) and the
+exhaustive a–z manual search — no behavior change for any query, as expected, since
+this removes dead weight rather than altering what should match. The side effect I
+specifically checked for: that removing the join wouldn't cause the `tags` field to
+disappear from results, since it now relies entirely on the `Song.tags` relationship
+instead of the join — confirmed it did not.
+
+**AI disclosure for this entry specifically:** My first answer to the user asking
+"does removing the join fix this?" was an overconfident "yes" based on reading the
+join and assuming it would cause visible duplicates, without first checking whether
+it actually did. It was the *reproduction* step — reading the actual behavior
+rather than reasoning about what "should" happen — that caught the error and led
+to the real (more nuanced) explanation above.
